@@ -11,7 +11,7 @@ This was based on some of the sample Python scripts provided with Bluez.   I am 
 
 * This was tested on a Raspberry Pi 3, running Raspbian Jessie.  It should be fairly easy to port to other platforms.
 * Requires Bluez with LE support.
-  * I tested using Bluesz 5.43.  
+  * I tested using Bluez 5.43.  
 * Waterrower with S4 interface
 * Python
 
