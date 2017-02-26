@@ -17,29 +17,40 @@ class S4State:
     
 class S4Interface(object):
     def __init__(self):
-        self.port = serial.Serial("/dev/ttyACM0", baudrate=115200, timeout=0.2)
-        # Send the intro "USB" message to kick off the S4 so it starts streaming data
-        self.port.write("USB\r\n")
+        self.serial_open = 0
+        self.StartSerial()
         self.Reset()
         
     def  DoIt(self):  
 
+        if self.serial_open == 0:
+            self.StartSerial()
+        
         S4Process = 1
         start_time = time.time()
 
         # Run for most 0.5 seconds and bail when completely idle
-        while S4Process and (time.time() - start_time < 0.5):
-            rcv = self.port.readline()
-
-            if rcv:
-                self.parse(rcv)
-                # If 0.5 second has elapsed from the previous query, query kcal memory again
-                if (time.time() - self.query_time) >= 0.5:
-                    self.port.write("IRT08A\r\n")
-                    self.query_time = time.time()
-            else:
-                # readline got nothing, so bail
+        while self.serial_open and S4Process and (time.time() - start_time < 0.5):
+            try:
+                rcv = self.port.readline()
+            except serial.SerialException as e:
+                print("Ummm... serial exception")
                 S4Process = 0
+                self.serial_open = 0
+            except TypeError as e:
+                print("Heyo! Typo!")
+                S4Process = 0
+                self.serial_open = 0
+            else:
+                if rcv:
+                    self.parse(rcv)
+                    # If 1 second has elapsed from the previous query, query kcal memory again
+                    if (time.time() - self.query_time) >= 1:
+                        self.port.write("IRT08A\r\n")
+                        self.query_time = time.time()
+                else:
+                    # readline got nothing, so bail
+                    S4Process = 0
 
     def parse(self, rcv):
         
@@ -93,6 +104,17 @@ class S4Interface(object):
         self.last_kcal = 0
         self.first_kcal = 1 # flag for first time we get the kcal tally - use the current value as a base
         self.last_stroke_time = time.time()
+
+    def StartSerial(self):
+        try:
+            self.port = serial.Serial("/dev/ttyACM0", baudrate=115200, timeout=0.2)
+        except serial.SerialException as e:
+            serial.serial_open = 0
+            print("Failed to open interface to WaterRower... ")
+        else:
+            # Send the intro "USB" message to kick off the S4 so it starts streaming data
+            self.port.write("USB\r\n")
+            self.serial_open = 1
 
 # Example of running this as a standalone test
 
