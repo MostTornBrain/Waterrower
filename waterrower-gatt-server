@@ -52,6 +52,7 @@ class Application(dbus.service.Object):
         self.path = '/'
         self.services = []
         dbus.service.Object.__init__(self, bus, self.path)
+        self.add_service(CSCService(bus, 1))
         self.add_service(CyclingPowerService(bus, 2))
     
     def get_path(self):
@@ -249,6 +250,98 @@ class Descriptor(dbus.service.Object):
         print('Default WriteValue called, returning error')
         raise NotSupportedException()
 
+class CSCService(Service):
+    TEST_SVC_UUID = '1816'
+    
+    def __init__(self, bus, index):
+        Service.__init__(self, bus, index, self.TEST_SVC_UUID, True)
+        self.add_characteristic(CSCMeasurement(bus, 0, self))
+        self.add_characteristic(CSCFeatureCharacteristic(bus, 1, self))
+
+class CSCMeasurement(Characteristic):
+    CYCLING_POWER_MEASUREMENT_UUID = '2a5b'
+    
+    def __init__(self, bus, index, service):
+        Characteristic.__init__(
+                self, bus, index,
+                self.CYCLING_POWER_MEASUREMENT_UUID,
+                ['notify', 'broadcast'],
+                service)
+        self.notifying = False
+    
+    def hr_msrmt_cb(self):
+        # Flags bit 0,1 set to enable wheel and crank revolution data
+        value = [dbus.Byte(0 | (1 << 0) | (1 << 1) ),  # 8-bit Flags
+                 dbus.Byte(0), dbus.Byte(0), dbus.Byte(0), dbus.Byte(0), # Cumulative wheel revs
+                 dbus.Byte(0), dbus.Byte(0),  # Last rev Time
+                 dbus.Byte(0), dbus.Byte(0),  # Cumulative Crank
+                 dbus.Byte(0), dbus.Byte(0)   # Last Crank Time
+                 ]
+        
+        s4.DoIt()
+
+        # Build revolution data - little endian
+        value[4] = (s4.wheel_revolutions & 0xFF000000) >> 24
+        value[3] = (s4.wheel_revolutions & 0xFF0000) >> 16
+        value[2] = (s4.wheel_revolutions & 0xFF00) >> 8
+        value[1] = (s4.wheel_revolutions & 0xFF)
+
+        time_in_1024_sec = int(s4.rev_time * 1024) & 0xFFFF
+        value[6] = (time_in_1024_sec & 0xFF00) >> 8
+        value[5] = (time_in_1024_sec & 0xFF)
+
+        # Build crank (stroke) data - little endian
+        value[8] = (s4.stroke_count & 0xFF00) >> 8
+        value[7] = (s4.stroke_count & 0xFF)
+
+        time_in_1024_sec = int(s4.last_stroke_time * 1024) & 0xFFFF
+        value[10] = (time_in_1024_sec & 0xFF00) >> 8
+        value[9] = (time_in_1024_sec & 0xFF)
+
+        self.PropertiesChanged(GATT_CHRC_IFACE, { 'Value': value }, [])
+        return self.notifying
+    
+    def _update_hr_msrmt_simulation(self):
+        print('Update CSC Measurement Simulation')
+        
+        if not self.notifying:
+            return
+        
+        GObject.timeout_add(1000, self.hr_msrmt_cb)
+    
+    def StartNotify(self):
+	        if self.notifying:
+	            print('Already notifying, nothing to do')
+	            return
+	        
+	        self.notifying = True
+	        self._update_hr_msrmt_simulation()
+    
+    def StopNotify(self):
+	        if not self.notifying:
+	            print('Not notifying, nothing to do')
+	            return
+	        
+	        self.notifying = False
+	        self._update_hr_msrmt_simulation()
+
+
+class CSCFeatureCharacteristic(Characteristic):
+
+    CYCLING_POWER_FEATURE_UUID = '2a5c'
+
+    def __init__(self, bus, index, service):
+        Characteristic.__init__(
+                self, bus, index,
+                self.CYCLING_POWER_FEATURE_UUID,
+                ['read', ],
+                service)
+        # Bits 0,1 enable wheel and crank data
+        self.value = [ dbus.Byte(0 | (1 << 0) | (1 << 1)), dbus.Byte(0) ]
+
+    def ReadValue(self, options):
+        print('CSCFeatureCharacteristic Read: ' + repr(self.value))
+        return self.value
 
 
 class CyclingPowerService(Service):
@@ -270,12 +363,13 @@ class CyclingPowerMeasurement(Characteristic):
                 ['notify', 'broadcast'],
                 service)
         self.notifying = False
-        self.s4 = waterrower.S4Interface()
     
     def hr_msrmt_cb(self):
-        # Flags bit 5 set to enable crank revolution data
-        value = [dbus.Byte(0 | (1 <<5) ), dbus.Byte(0), # 16bit Flags
+        # Flags bit 4,5 set to enable wheel and crank revolution data
+        value = [dbus.Byte(0 | (1 << 4) | (1 <<5) ), dbus.Byte(0), # 16bit Flags
                  dbus.Byte(0), dbus.Byte(0),  # Instantaneous power
+                 dbus.Byte(0), dbus.Byte(0), dbus.Byte(0), dbus.Byte(0), # Cumulative wheel revs
+                 dbus.Byte(0), dbus.Byte(0),  # Last rev Time
                  dbus.Byte(0), dbus.Byte(0),  # Cumulative Crank
                  dbus.Byte(0), dbus.Byte(0)   # Last Crank Time
                  ]
@@ -283,22 +377,31 @@ class CyclingPowerMeasurement(Characteristic):
         # Flags is 16bits
         # power in watts - 16 bits
 
-        self.s4.DoIt()
+        s4.DoIt()
 
         # Build kcal data - little endian
-        value[3] = (self.s4.kcal & 0xFF00) >> 8
-        value[2] = (self.s4.kcal & 0xFF)
+        value[3] = (s4.kcal & 0xFF00) >> 8
+        value[2] = (s4.kcal & 0xFF)
+
+        # Build revolution data - little endian
+        value[7] = (s4.wheel_revolutions & 0xFF000000) >> 24
+        value[6] = (s4.wheel_revolutions & 0xFF0000) >> 16
+        value[5] = (s4.wheel_revolutions & 0xFF00) >> 8
+        value[4] = (s4.wheel_revolutions & 0xFF)
+
+        time_in_2048_sec = int(s4.rev_time * 2048) & 0xFFFF
+        value[9] = (time_in_2048_sec & 0xFF00) >> 8
+        value[8] = (time_in_2048_sec & 0xFF)
 
         # Build crank (stroke) data - little endian
-        value[5] = (self.s4.stroke_count & 0xFF00) >> 8
-        value[4] = (self.s4.stroke_count & 0xFF)
+        value[11] = (s4.stroke_count & 0xFF00) >> 8
+        value[10] = (s4.stroke_count & 0xFF)
 
-        time_in_1024_sec = int(self.s4.last_stroke_time * 1024) & 0xFFFF
-        value[7] = (time_in_1024_sec & 0xFF00) >> 8
-        value[6] = (time_in_1024_sec & 0xFF)
+        time_in_1024_sec = int(s4.last_stroke_time * 1024) & 0xFFFF
+        value[13] = (time_in_1024_sec & 0xFF00) >> 8
+        value[12] = (time_in_1024_sec & 0xFF)
 
         self.PropertiesChanged(GATT_CHRC_IFACE, { 'Value': value }, [])
-        print("prop:" + repr(value))
         return self.notifying
     
     def _update_hr_msrmt_simulation(self):
@@ -377,6 +480,8 @@ def find_adapter(bus):
             return o
     
     return None
+
+s4 = waterrower.S4Interface()
 
 def main():
     global mainloop
